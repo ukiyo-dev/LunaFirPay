@@ -201,3 +201,7 @@ node callback-proxy.js
 **如果这个项目对你有帮助，请给一个 ⭐ Star**
 
 </div>
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Skynami/LunaFirPay&type=date&legend=top-left)](https://www.star-history.com/#Skynami/LunaFirPay&type=date&legend=top-left)
