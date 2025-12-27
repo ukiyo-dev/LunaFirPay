@@ -1,6 +1,6 @@
 <div align="center">
 
-# 💳 LunFirPay Server
+# 💳 LunaFirPay Server
 
 **基于 Node.js 的高性能支付平台后端**</br>
 **你就是下一个麻瓜宝/番茄支付**
