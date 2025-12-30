@@ -750,16 +750,521 @@ async function close(channelConfig, order) {
     return { code: 0 };
 }
 
+/**
+ * 查询订单
+ */
+async function query(channelConfig, tradeNo) {
+    const bizContent = {
+        out_trade_no: tradeNo
+    };
+    
+    const params = buildRequestParams(channelConfig, 'alipay.trade.query', bizContent, channelConfig);
+    const response = await sendRequest(params);
+    
+    const result = response.alipay_trade_query_response;
+    if (result.code !== '10000') {
+        throw new Error(result.sub_msg || result.msg || '查询订单失败');
+    }
+    
+    return {
+        trade_no: result.out_trade_no,
+        api_trade_no: result.trade_no,
+        buyer: result.buyer_user_id || result.buyer_open_id,
+        total_amount: result.total_amount,
+        trade_status: result.trade_status
+    };
+}
+
+/**
+ * 电脑网站支付扫码
+ */
+async function qrcodepc(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, return_url, is_mobile, clientip } = orderInfo;
+    const siteurl = conf.siteurl || '';
+    
+    if (is_mobile) {
+        // 手机端获取二维码图片
+        const config = {
+            ...channelConfig,
+            notify_url,
+            return_url
+        };
+        
+        const bizContent = {
+            out_trade_no: trade_no,
+            total_amount: money.toFixed(2),
+            subject: name,
+            qr_pay_mode: '4'
+        };
+        
+        if (clientip) {
+            bizContent.business_params = { mc_create_trade_ip: clientip };
+        }
+        
+        handleExtUserInfo(bizContent, orderInfo, channelConfig);
+        
+        // 直接使用扫码支付的二维码
+        const params = buildRequestParams(config, 'alipay.trade.precreate', bizContent, channelConfig);
+        const response = await sendRequest(params);
+        
+        const result = response.alipay_trade_precreate_response;
+        if (result.code !== '10000') {
+            throw new Error(result.sub_msg || result.msg || '获取二维码失败');
+        }
+        
+        return { type: 'qrcode', page: 'alipay_qrcode', url: result.qr_code };
+    } else {
+        // 电脑端显示扫码页面
+        return { type: 'qrcode', page: 'alipay_qrcodepc', url: `/pay/submitpc/${trade_no}/` };
+    }
+}
+
+/**
+ * 电脑网站支付扫码跳转
+ */
+async function submitpc(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, return_url, clientip } = orderInfo;
+    
+    const config = {
+        ...channelConfig,
+        notify_url,
+        return_url
+    };
+    
+    const bizContent = {
+        out_trade_no: trade_no,
+        total_amount: money.toFixed(2),
+        subject: name,
+        qr_pay_mode: '4',
+        qrcode_width: '230'
+    };
+    
+    if (clientip) {
+        bizContent.business_params = { mc_create_trade_ip: clientip };
+    }
+    
+    handleExtUserInfo(bizContent, orderInfo, channelConfig);
+    
+    const params = buildRequestParams(config, 'alipay.trade.page.pay', bizContent, channelConfig);
+    const html = '<!DOCTYPE html><html><body><style>body{margin:0;padding:0}.waiting{position:absolute;width:100%;height:100%;background:#fff url(/assets/img/load.gif) no-repeat fixed center/80px;}</style><div class="waiting"></div>' + buildPayForm(params) + '</body></html>';
+    
+    return { type: 'html', data: html };
+}
+
+/**
+ * 手机网站支付扫码跳转
+ */
+async function submitwap(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, return_url, clientip } = orderInfo;
+    
+    const config = {
+        ...channelConfig,
+        notify_url,
+        return_url
+    };
+    
+    const bizContent = {
+        out_trade_no: trade_no,
+        total_amount: money.toFixed(2),
+        subject: name
+    };
+    
+    if (clientip) {
+        bizContent.business_params = { mc_create_trade_ip: clientip };
+    }
+    
+    handleExtUserInfo(bizContent, orderInfo, channelConfig);
+    
+    const params = buildRequestParams(config, 'alipay.trade.wap.pay', bizContent, channelConfig);
+    
+    return { type: 'html', data: buildPayForm(params) };
+}
+
+/**
+ * 预授权支付
+ */
+async function preauth(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, clientip } = orderInfo;
+    const siteurl = conf.siteurl || '';
+    
+    const config = {
+        ...channelConfig,
+        notify_url: notify_url.replace('/notify/', '/preauthnotify/')
+    };
+    
+    const bizContent = {
+        out_order_no: trade_no,
+        out_request_no: trade_no,
+        order_title: name,
+        amount: money.toFixed(2),
+        product_code: 'PREAUTH_PAY'
+    };
+    
+    if (clientip) {
+        bizContent.business_params = { mc_create_trade_ip: clientip };
+    }
+    
+    const params = buildRequestParams(config, 'alipay.fund.auth.order.app.freeze', bizContent, channelConfig);
+    
+    // 构建SDK参数字符串
+    const sdkParams = Object.keys(params).sort().map(k => `${k}=${encodeURIComponent(params[k])}`).join('&');
+    
+    const code_url = `alipays://platformapi/startApp?appId=20000125&orderSuffix=${encodeURIComponent(sdkParams)}`;
+    return {
+        type: 'page',
+        page: 'alipay_h5',
+        data: { code_url, redirect_url: `/pay/ok/${trade_no}/` }
+    };
+}
+
+/**
+ * 支付宝小程序支付
+ */
+async function alipaymini(channelConfig, orderInfo, conf, authCode) {
+    const { trade_no, money, name, notify_url, clientip } = orderInfo;
+    
+    if (!authCode) {
+        return { code: -1, msg: 'auth_code不能为空' };
+    }
+    
+    // 通过auth_code换取用户信息
+    const oauthResult = await alipayOAuthByCode(channelConfig, authCode);
+    if (!oauthResult.success) {
+        return { code: -1, msg: oauthResult.msg || '获取用户信息失败' };
+    }
+    
+    const { user_id, user_type, app_id } = oauthResult;
+    
+    const config = {
+        ...channelConfig,
+        notify_url
+    };
+    
+    const bizContent = {
+        out_trade_no: trade_no,
+        total_amount: money.toFixed(2),
+        subject: name,
+        product_code: 'JSAPI_PAY',
+        op_app_id: app_id || channelConfig.appid
+    };
+    
+    if (user_type === 'openid') {
+        bizContent.buyer_open_id = user_id;
+    } else {
+        bizContent.buyer_id = user_id;
+    }
+    
+    if (clientip) {
+        bizContent.business_params = { mc_create_trade_ip: clientip };
+    }
+    
+    handleExtUserInfo(bizContent, orderInfo, channelConfig);
+    
+    const params = buildRequestParams(config, 'alipay.trade.create', bizContent, channelConfig);
+    const response = await sendRequest(params);
+    
+    const result = response.alipay_trade_create_response;
+    if (result.code !== '10000') {
+        return { code: -1, msg: result.sub_msg || result.msg || '支付宝下单失败' };
+    }
+    
+    return { code: 0, data: result.trade_no };
+}
+
+/**
+ * H5跳转小程序支付
+ */
+async function minipay(channelConfig, orderInfo, conf) {
+    const { trade_no } = orderInfo;
+    const appId = channelConfig.appid;
+    
+    // 生成小程序跳转URL
+    const code_url = `alipays://platformapi/startapp?appId=${appId}&page=pages/pay/pay&query=${encodeURIComponent(`trade_no=${trade_no}`)}`;
+    
+    return {
+        type: 'page',
+        page: 'alipay_h5',
+        data: { code_url, redirect_url: `/pay/ok/${trade_no}/` }
+    };
+}
+
+/**
+ * 支付成功页面
+ */
+function ok() {
+    return { type: 'page', page: 'ok' };
+}
+
+/**
+ * 同步回调
+ */
+async function returnCallback(channelConfig, getData, order) {
+    try {
+        const sign = getData.sign;
+        const signType = getData.sign_type || 'RSA2';
+        
+        const params = { ...getData };
+        delete params.sign;
+        delete params.sign_type;
+        
+        const signString = buildSignString(params);
+        
+        let publicKey = channelConfig.appkey;
+        const alipayCertPath = getCertAbsolutePath(channelConfig, 'alipayCert');
+        if (alipayCertPath && fs.existsSync(alipayCertPath)) {
+            const certPublicKey = getPublicKeyFromCert(alipayCertPath);
+            if (certPublicKey) publicKey = certPublicKey;
+        }
+        
+        if (!publicKey) {
+            return { success: false, msg: '支付宝公钥未配置' };
+        }
+        
+        const isValid = rsaVerify(signString, sign, publicKey, signType);
+        
+        if (!isValid) {
+            return { success: false, msg: '支付宝返回验证失败' };
+        }
+        
+        if (getData.out_trade_no !== order.trade_no) {
+            return { success: false, msg: '订单号不匹配' };
+        }
+        
+        if (Math.abs(parseFloat(getData.total_amount) - parseFloat(order.real_money)) > 0.01) {
+            return { success: false, msg: '订单金额不匹配' };
+        }
+        
+        return {
+            success: true,
+            api_trade_no: getData.trade_no
+        };
+    } catch (error) {
+        console.error('支付宝同步回调处理错误:', error);
+        return { success: false, msg: error.message };
+    }
+}
+
+/**
+ * 预授权支付回调
+ */
+async function preauthnotify(channelConfig, notifyData, order, conf, ordername) {
+    try {
+        const sign = notifyData.sign;
+        const signType = notifyData.sign_type || 'RSA2';
+        
+        const params = { ...notifyData };
+        delete params.sign;
+        delete params.sign_type;
+        
+        const signString = buildSignString(params);
+        
+        let publicKey = channelConfig.appkey;
+        const alipayCertPath = getCertAbsolutePath(channelConfig, 'alipayCert');
+        if (alipayCertPath && fs.existsSync(alipayCertPath)) {
+            const certPublicKey = getPublicKeyFromCert(alipayCertPath);
+            if (certPublicKey) publicKey = certPublicKey;
+        }
+        
+        if (!publicKey) {
+            return { success: false };
+        }
+        
+        const isValid = rsaVerify(signString, sign, publicKey, signType);
+        
+        if (!isValid) {
+            return { success: false };
+        }
+        
+        if (notifyData.out_order_no !== order.trade_no) {
+            return { success: false };
+        }
+        
+        const authNo = notifyData.auth_no;
+        const buyerId = notifyData.payer_user_id;
+        
+        // 资金授权转交易
+        const config = {
+            ...channelConfig,
+            notify_url: conf.localurl + 'pay/notify/' + order.trade_no + '/'
+        };
+        
+        const bizContent = {
+            out_trade_no: order.trade_no,
+            total_amount: order.real_money,
+            subject: ordername,
+            product_code: 'PREAUTH_PAY',
+            auth_no: authNo,
+            auth_confirm_mode: 'COMPLETE'
+        };
+        
+        const tradeParams = buildRequestParams(config, 'alipay.trade.pay', bizContent, channelConfig);
+        const response = await sendRequest(tradeParams);
+        
+        const result = response.alipay_trade_pay_response;
+        if (result.code !== '10000') {
+            return {
+                success: true,
+                api_trade_no: authNo,
+                buyer: buyerId,
+                status: 4
+            };
+        }
+        
+        return {
+            success: true,
+            api_trade_no: result.trade_no,
+            buyer: result.buyer_user_id,
+            total_amount: result.total_amount
+        };
+    } catch (error) {
+        console.error('预授权回调处理错误:', error);
+        return { success: false };
+    }
+}
+
+/**
+ * 支付宝应用网关
+ */
+async function appgw(channelConfig, notifyData) {
+    const sign = notifyData.sign;
+    const signType = notifyData.sign_type || 'RSA2';
+    
+    const params = { ...notifyData };
+    delete params.sign;
+    delete params.sign_type;
+    
+    const signString = buildSignString(params);
+    
+    let publicKey = channelConfig.appkey;
+    const alipayCertPath = getCertAbsolutePath(channelConfig, 'alipayCert');
+    if (alipayCertPath && fs.existsSync(alipayCertPath)) {
+        const certPublicKey = getPublicKeyFromCert(alipayCertPath);
+        if (certPublicKey) publicKey = certPublicKey;
+    }
+    
+    if (!publicKey) {
+        return { success: false, msg: 'check sign fail' };
+    }
+    
+    const isValid = rsaVerify(signString, sign, publicKey, signType);
+    
+    if (!isValid) {
+        return { success: false, msg: 'check sign fail' };
+    }
+    
+    const msgMethod = notifyData.msg_method;
+    const notifyType = notifyData.notify_type;
+    let bizContent = {};
+    
+    if (notifyData.biz_content) {
+        try {
+            bizContent = JSON.parse(notifyData.biz_content);
+        } catch (e) { }
+    }
+    
+    // 根据消息类型处理
+    if (msgMethod === 'alipay.merchant.tradecomplain.changed') {
+        return { success: true, type: 'tradecomplain', data: bizContent };
+    } else if (notifyType === 'open_app_auth_notify') {
+        return { success: true, type: 'app_auth', data: bizContent };
+    }
+    
+    return { success: true };
+}
+
+/**
+ * 通过auth_code换取用户信息
+ */
+async function alipayOAuthByCode(channelConfig, authCode) {
+    const params = {
+        app_id: channelConfig.appid,
+        method: 'alipay.system.oauth.token',
+        format: 'JSON',
+        charset: 'utf-8',
+        sign_type: 'RSA2',
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        version: '1.0',
+        grant_type: 'authorization_code',
+        code: authCode
+    };
+    
+    // 添加授权token
+    if (channelConfig.appmchid) {
+        params.app_auth_token = channelConfig.appmchid;
+    }
+    
+    // 添加证书信息
+    const appCertPath = getCertAbsolutePath(channelConfig, 'appCert');
+    const rootCertPath = getCertAbsolutePath(channelConfig, 'alipayRootCert');
+    if (appCertPath && rootCertPath && fs.existsSync(appCertPath) && fs.existsSync(rootCertPath)) {
+        const appCertSN = getCertSN(appCertPath);
+        const alipayRootCertSN = getRootCertSN(rootCertPath);
+        if (appCertSN) params.app_cert_sn = appCertSN;
+        if (alipayRootCertSN) params.alipay_root_cert_sn = alipayRootCertSN;
+    }
+    
+    const signString = buildSignString(params);
+    params.sign = rsaSign(signString, channelConfig.appsecret);
+    
+    try {
+        const response = await sendRequest(params);
+        const result = response.alipay_system_oauth_token_response;
+        
+        if (!result || result.code) {
+            return { success: false, msg: result?.sub_msg || result?.msg || '获取用户信息失败' };
+        }
+        
+        const userId = result.user_id || result.open_id;
+        const userType = result.user_id ? 'userid' : 'openid';
+        
+        return {
+            success: true,
+            user_id: userId,
+            user_type: userType,
+            app_id: result.auth_app_id,
+            access_token: result.access_token
+        };
+    } catch (e) {
+        return { success: false, msg: e.message };
+    }
+}
+
+/**
+ * 生成OAuth跳转URL
+ */
+function getOAuthUrl(channelConfig, redirectUrl, scope = 'auth_base') {
+    const appId = channelConfig.appid;
+    const encodedRedirect = encodeURIComponent(redirectUrl);
+    return `https://openauth.alipay.com/oauth2/publicAppAuthorize.htm?app_id=${appId}&scope=${scope}&redirect_uri=${encodedRedirect}`;
+}
+
+/**
+ * 辅助函数 - 延时
+ */
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 module.exports = {
     info,
     submit,
     mapi,
     qrcode,
+    qrcodepc,
+    submitpc,
+    submitwap,
     apppay,
+    preauth,
     jspay,
     jsapipay,
+    alipaymini,
+    minipay,
     scanpay,
+    ok,
     notify,
+    return: returnCallback,
+    preauthnotify,
     refund,
-    close
+    close,
+    appgw
 };

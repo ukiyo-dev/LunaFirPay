@@ -365,12 +365,112 @@ async function refund(channelConfig, refundInfo) {
     }
 }
 
+/**
+ * 获取收款方支付宝UID
+ */
+async function getPayee(channelConfig, order, db) {
+    // 如果配置了收款方UID，优先使用
+    if (channelConfig.appmchid) {
+        return channelConfig.appmchid;
+    }
+    
+    // 否则从商户表获取绑定的支付宝UID
+    if (db && order && order.uid) {
+        try {
+            const user = await db.findOne('user', { uid: order.uid });
+            return user?.alipay_uid || null;
+        } catch (e) {
+            console.error('获取商户支付宝UID失败:', e.message);
+            return null;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * 订单查询
+ */
+async function query(channelConfig, trade_no) {
+    const bizContent = {
+        product_code: 'STD_RED_PACKET',
+        biz_scene: 'PERSONAL_PAY',
+        out_biz_no: trade_no
+    };
+    
+    try {
+        const params = buildRequestParams(channelConfig, 'alipay.fund.trans.common.query', bizContent, channelConfig);
+        const response = await sendRequest(params);
+        const result = response.alipay_fund_trans_common_query_response;
+        
+        if (result && result.code === '10000') {
+            return {
+                code: 0,
+                data: {
+                    order_id: result.order_id,
+                    status: result.status,
+                    trans_amount: result.trans_amount,
+                    pay_date: result.pay_date
+                }
+            };
+        } else {
+            return {
+                code: -1,
+                msg: result?.sub_msg || result?.msg || '查询失败'
+            };
+        }
+    } catch (error) {
+        return { code: -1, msg: error.message };
+    }
+}
+
+/**
+ * 支付成功页面
+ */
+async function ok(channelConfig, orderInfo) {
+    return { type: 'page', page: 'ok' };
+}
+
+/**
+ * 红包转账给收款方
+ */
+async function redPacketTransfer(channelConfig, outBizNo, transAmount, payeeUserId, orderTitle, origOrderId) {
+    const bizContent = {
+        out_biz_no: outBizNo,
+        trans_amount: transAmount,
+        product_code: 'STD_RED_PACKET',
+        biz_scene: 'PERSONAL_COLLECTION',
+        order_title: orderTitle,
+        payee_info: {
+            identity: payeeUserId,
+            identity_type: 'ALIPAY_USER_ID'
+        },
+        original_order_id: origOrderId
+    };
+    
+    const params = buildRequestParams(channelConfig, 'alipay.fund.trans.uni.transfer', bizContent, channelConfig);
+    const response = await sendRequest(params);
+    const result = response.alipay_fund_trans_uni_transfer_response;
+    
+    if (result && result.code === '10000') {
+        return {
+            success: true,
+            order_id: result.order_id,
+            pay_fund_order_id: result.pay_fund_order_id
+        };
+    } else {
+        throw new Error(result?.sub_msg || result?.msg || '转账失败');
+    }
+}
+
 module.exports = {
     info,
     submit,
     mapi,
     qrcode,
     pagepay,
+    query,
+    ok,
     notify,
     refund
 };

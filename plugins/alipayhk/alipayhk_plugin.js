@@ -45,6 +45,12 @@ const info = {
 
 const GATEWAY_URL = 'https://intlmapi.alipay.com/gateway.do';
 
+// 交易信息
+const TRADE_INFORMATION = {
+    business_type: '5',
+    other_business_type: '在线充值'
+};
+
 /**
  * MD5签名
  */
@@ -88,7 +94,13 @@ function buildPayForm(params) {
  * 发起支付
  */
 async function submit(channelConfig, orderInfo, conf) {
-    const { trade_no } = orderInfo;
+    const { trade_no, is_wechat } = orderInfo;
+    
+    // 在微信浏览器中需要跳转
+    if (is_wechat) {
+        return { type: 'page', page: 'wxopen' };
+    }
+    
     return {
         type: 'jump',
         url: `/pay/alipay/${trade_no}/`
@@ -96,19 +108,68 @@ async function submit(channelConfig, orderInfo, conf) {
 }
 
 /**
- * 支付处理
+ * 支付处理 - 根据设备和配置选择支付方式
  */
 async function alipay(channelConfig, orderInfo, conf) {
-    const { trade_no, money, name, notify_url, return_url, is_mobile, apptype } = orderInfo;
+    const { trade_no, money, name, notify_url, return_url, is_mobile, is_alipay, apptype, payment_inst } = orderInfo;
     const siteurl = conf.siteurl || '';
     
-    const tradeInfo = {
-        business_type: '5',
-        other_business_type: '在线充值'
-    };
+    // 如果开启了钱包选择且没有指定类型，显示选择页面
+    if (channelConfig.appswitch === '1' && !payment_inst) {
+        return {
+            type: 'page',
+            page: 'alipayhk_select',
+            data: {
+                trade_no: trade_no,
+                options: [
+                    { type: 'ALIPAYCN', name: 'Alipay (支付宝)' },
+                    { type: 'ALIPAYHK', name: 'AlipayHK' }
+                ]
+            }
+        };
+    }
+    
+    // 移动端
+    if (is_mobile) {
+        if (apptype && apptype.includes('2')) {
+            return await wappay(channelConfig, orderInfo, conf);
+        } else if (apptype && apptype.includes('1')) {
+            return await submitpc(channelConfig, orderInfo, conf);
+        } else if (apptype && apptype.includes('3')) {
+            if (is_alipay) {
+                return await apppay(channelConfig, orderInfo, conf);
+            } else {
+                const code_url = `${siteurl}pay/apppay/${trade_no}/${payment_inst ? '?type=' + payment_inst : ''}`;
+                return { type: 'qrcode', page: 'alipay_qrcode', url: code_url };
+            }
+        }
+    } else {
+        // PC端
+        if (apptype && apptype.includes('1')) {
+            const code_url = `/pay/submitpc/${trade_no}/${payment_inst ? '?type=' + payment_inst : ''}`;
+            return { type: 'qrcode', page: 'alipay_qrcodepc', url: code_url };
+        } else if (apptype && apptype.includes('2')) {
+            const code_url = `${siteurl}pay/wappay/${trade_no}/${payment_inst ? '?type=' + payment_inst : ''}`;
+            return { type: 'qrcode', page: 'alipay_qrcode', url: code_url };
+        } else if (apptype && apptype.includes('3')) {
+            const code_url = `${siteurl}pay/apppay/${trade_no}/${payment_inst ? '?type=' + payment_inst : ''}`;
+            return { type: 'qrcode', page: 'alipay_qrcode', url: code_url };
+        }
+    }
+    
+    // 默认WAP支付
+    return await wappay(channelConfig, orderInfo, conf);
+}
+
+/**
+ * PC支付
+ */
+async function submitpc(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, return_url, is_mobile, is_alipay, payment_inst } = orderInfo;
+    const siteurl = conf.siteurl || '';
     
     const params = {
-        service: is_mobile ? 'create_forex_trade_wap' : 'create_forex_trade',
+        service: 'create_forex_trade',
         partner: channelConfig.appid,
         notify_url: notify_url,
         return_url: return_url,
@@ -118,13 +179,63 @@ async function alipay(channelConfig, orderInfo, conf) {
         rmb_fee: money.toFixed(2),
         refer_url: siteurl,
         product_code: 'NEW_WAP_OVERSEAS_SELLER',
-        trade_information: JSON.stringify(tradeInfo),
+        qr_pay_mode: '4',
+        qrcode_width: '230',
+        trade_information: JSON.stringify(TRADE_INFORMATION),
         _input_charset: 'utf-8'
     };
     
-    if (!is_mobile) {
-        params.qr_pay_mode = '4';
-        params.qrcode_width = '230';
+    if (payment_inst) {
+        params.payment_inst = payment_inst;
+    }
+    
+    params.sign = md5Sign(params, channelConfig.appkey);
+    params.sign_type = 'MD5';
+    
+    // 移动端非支付宝内，需要获取二维码
+    if (is_mobile && !is_alipay) {
+        try {
+            const response = await axios.get(GATEWAY_URL, { params: params });
+            const html = response.data;
+            const match = html.match(/<input name="qrCode" type="hidden" value="(.*?)"/i);
+            if (match && match[1]) {
+                return { type: 'qrcode', page: 'alipay_qrcode', url: match[1] };
+            } else {
+                return { type: 'error', msg: '支付宝下单失败！获取二维码失败' };
+            }
+        } catch (error) {
+            return { type: 'error', msg: error.message };
+        }
+    }
+    
+    const formHtml = buildPayForm(params);
+    return { type: 'html', data: formHtml };
+}
+
+/**
+ * WAP支付
+ */
+async function wappay(channelConfig, orderInfo, conf) {
+    const { trade_no, money, name, notify_url, return_url, payment_inst } = orderInfo;
+    const siteurl = conf.siteurl || '';
+    
+    const params = {
+        service: 'create_forex_trade_wap',
+        partner: channelConfig.appid,
+        notify_url: notify_url,
+        return_url: return_url,
+        out_trade_no: trade_no,
+        subject: name,
+        currency: 'HKD',
+        rmb_fee: money.toFixed(2),
+        refer_url: siteurl,
+        product_code: 'NEW_WAP_OVERSEAS_SELLER',
+        trade_information: JSON.stringify(TRADE_INFORMATION),
+        _input_charset: 'utf-8'
+    };
+    
+    if (payment_inst) {
+        params.payment_inst = payment_inst;
     }
     
     params.sign = md5Sign(params, channelConfig.appkey);
@@ -138,13 +249,8 @@ async function alipay(channelConfig, orderInfo, conf) {
  * APP支付
  */
 async function apppay(channelConfig, orderInfo, conf) {
-    const { trade_no, money, name, notify_url, return_url } = orderInfo;
+    const { trade_no, money, name, notify_url, return_url, method, payment_inst } = orderInfo;
     const siteurl = conf.siteurl || '';
-    
-    const tradeInfo = {
-        business_type: '5',
-        other_business_type: '在线充值'
-    };
     
     const params = {
         service: 'mobile.securitypay.pay',
@@ -160,9 +266,13 @@ async function apppay(channelConfig, orderInfo, conf) {
         forex_biz: 'FP',
         refer_url: siteurl,
         product_code: 'NEW_WAP_OVERSEAS_SELLER',
-        trade_information: JSON.stringify(tradeInfo),
+        trade_information: JSON.stringify(TRADE_INFORMATION),
         _input_charset: 'utf-8'
     };
+    
+    if (payment_inst) {
+        params.payment_inst = payment_inst;
+    }
     
     params.sign = md5Sign(params, channelConfig.appkey);
     params.sign_type = 'MD5';
@@ -172,7 +282,30 @@ async function apppay(channelConfig, orderInfo, conf) {
         .map(([k, v]) => `${k}="${v}"`)
         .join('&');
     
-    return { type: 'app', data: sdkParams };
+    // 如果是APP直接调用
+    if (method === 'app') {
+        return { type: 'app', data: sdkParams };
+    }
+    
+    // H5唤起支付宝APP
+    const redirect_url = orderInfo.d === '1' ? 'data.backurl' : `'/pay/ok/${trade_no}/'`;
+    const code_url = `alipays://platformapi/startApp?appId=20000125&orderSuffix=${encodeURIComponent(sdkParams)}#Intent;scheme=alipays;package=com.eg.android.AlipayGphone;end`;
+    
+    return {
+        type: 'page',
+        page: 'alipay_h5',
+        data: {
+            code_url: code_url,
+            redirect_url: redirect_url
+        }
+    };
+}
+
+/**
+ * 支付成功页面
+ */
+async function ok(channelConfig, orderInfo) {
+    return { type: 'page', page: 'ok' };
 }
 
 /**
@@ -266,6 +399,8 @@ module.exports = {
     info,
     submit,
     alipay,
+    submitpc,
+    wappay,
     apppay,
     notify,
     return: returnCallback,

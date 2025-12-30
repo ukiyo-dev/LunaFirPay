@@ -49,8 +49,24 @@ const info = {
                 'AUD': '澳元 (AUD)',
                 'CAD': '加拿大元 (CAD)',
                 'GBP': '英镑 (GBP)',
+                'BRL': '巴西雷亚尔 (BRL)',
+                'CZK': '克朗 (CZK)',
+                'DKK': '丹麦克朗(DKK)',
+                'HUF': '匈牙利福林 (HUF)',
+                'INR': '印度卢比 (INR)',
+                'ILS': '以色列新谢克尔 (ILS)',
                 'JPY': '日元 (JPY)',
+                'MYR': '马来西亚林吉特 (MYR)',
+                'MXN': '墨西哥比索 (MXN)',
+                'TWD': '新台币 (TWD)',
+                'NZD': '新西兰元 (NZD)',
+                'NOK': '挪威克朗 (NOK)',
+                'PHP': '菲律宾比索 (PHP)',
+                'PLN': '波兰兹罗提 (PLN)',
+                'RUB': '俄罗斯卢布 (RUB)',
                 'SGD': '新加坡元 (SGD)',
+                'SEK': '瑞典克朗 (SEK)',
+                'CHF': '瑞士法郎 (CHF)',
                 'THB': '泰铢 (THB)'
             }
         },
@@ -232,7 +248,7 @@ async function pay(channelConfig, orderInfo, conf) {
     };
     
     try {
-        const result = await client.execute('/ams/api/v1/payments/pay', params);
+        const result = await client.execute('/v1/payments/pay', params);
         
         if (result.normalUrl) {
             return { type: 'jump', url: result.normalUrl };
@@ -322,7 +338,7 @@ async function refund(channelConfig, refundInfo) {
     };
     
     try {
-        const result = await client.execute('/ams/api/v1/payments/refund', params);
+        const result = await client.execute('/v1/payments/refund', params);
         return {
             code: 0,
             trade_no: result.refundId,
@@ -349,7 +365,7 @@ async function close(channelConfig, order) {
     };
     
     try {
-        await client.execute('/ams/api/v1/payments/cancel', params);
+        await client.execute('/v1/payments/cancel', params);
         return { code: 0 };
     } catch (error) {
         throw new Error(error.message);
