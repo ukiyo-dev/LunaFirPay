@@ -156,7 +156,10 @@ async function validateCallbackDomain(merchantId, notifyUrl) {
     }
     
     // 查询系统配置是否启用域名白名单验证
-    const domainWhitelistEnabled = await systemConfig.getConfig('domain_whitelist_enabled');
+    let domainWhitelistEnabled = await systemConfig.getConfig('domain_whitelist_enabled');
+    // 确保转换为字符串进行比较，防止数据库返回数字类型导致判断失效
+    domainWhitelistEnabled = String(domainWhitelistEnabled);
+
     if (domainWhitelistEnabled !== '1' && domainWhitelistEnabled !== 'true') {
       // 未启用域名白名单验证，直接放行
       return { valid: true };
@@ -176,11 +179,15 @@ async function validateCallbackDomain(merchantId, notifyUrl) {
     const isValid = approvedDomains.some(d => {
       const approvedDomain = d.domain.toLowerCase();
       // 精确匹配
-      if (domain === approvedDomain) return true;
+      if (domain === approvedDomain) {
+        return true;
+      }
       // 泛域名匹配（如 *.example.com 匹配 api.example.com）
       if (approvedDomain.startsWith('*.')) {
         const baseDomain = approvedDomain.slice(2); // 去掉 *.
-        if (domain.endsWith('.' + baseDomain)) return true;
+        if (domain.endsWith('.' + baseDomain)) {
+          return true;
+        }
       }
       return false;
     });
@@ -192,8 +199,8 @@ async function validateCallbackDomain(merchantId, notifyUrl) {
     return { valid: true };
   } catch (error) {
     console.error('验证回调域名失败:', error);
-    // 验证失败时放行，避免阻断正常支付
-    return { valid: true };
+    // 验证失败时拦截，确保安全
+    return { valid: false, message: '系统错误：域名验证失败' };
   }
 }
 
@@ -622,13 +629,15 @@ router.all('/submit', async (req, res) => {
       return res.status(400).send('支付通道不存在或已关闭');
     }
 
-    // 检查金额限制
+    // 检查金额限制（只有限额大于0时才检查）
     const moneyFloat = parseFloat(money);
-    if (channel.min_amount && moneyFloat < channel.min_amount) {
-      return res.status(400).send(`支付金额不能小于 ${channel.min_amount} 元`);
+    const minAmount = parseFloat(channel.min_amount) || 0;
+    const maxAmount = parseFloat(channel.max_amount) || 0;
+    if (minAmount > 0 && moneyFloat < minAmount) {
+      return res.status(400).send(`支付金额不能小于 ${minAmount} 元`);
     }
-    if (channel.max_amount && moneyFloat > channel.max_amount) {
-      return res.status(400).send(`支付金额不能大于 ${channel.max_amount} 元`);
+    if (maxAmount > 0 && moneyFloat > maxAmount) {
+      return res.status(400).send(`支付金额不能大于 ${maxAmount} 元`);
     }
 
     // 获取费率：商户个人费率优先，否则用支付组费率
@@ -709,13 +718,15 @@ router.all('/mapi', async (req, res) => {
       return res.json({ code: -1, msg: '支付通道不存在或已关闭' });
     }
 
-    // 检查金额限制
+    // 检查金额限制（只有限额大于0时才检查）
     const moneyFloat = parseFloat(money);
-    if (channel.min_amount && moneyFloat < channel.min_amount) {
-      return res.json({ code: -1, msg: `支付金额不能小于 ${channel.min_amount} 元` });
+    const minAmount = parseFloat(channel.min_amount) || 0;
+    const maxAmount = parseFloat(channel.max_amount) || 0;
+    if (minAmount > 0 && moneyFloat < minAmount) {
+      return res.json({ code: -1, msg: `支付金额不能小于 ${minAmount} 元` });
     }
-    if (channel.max_amount && moneyFloat > channel.max_amount) {
-      return res.json({ code: -1, msg: `支付金额不能大于 ${channel.max_amount} 元` });
+    if (maxAmount > 0 && moneyFloat > maxAmount) {
+      return res.json({ code: -1, msg: `支付金额不能大于 ${maxAmount} 元` });
     }
 
     // 获取费率：商户个人费率优先，否则用支付组费率
@@ -920,13 +931,15 @@ router.all('/create', async (req, res) => {
       return res.json({ code: 1005, msg: '支付通道不存在或已关闭' });
     }
 
-    // 检查金额限制
+    // 检查金额限制（只有限额大于0时才检查）
     const moneyFloat = parseFloat(money);
-    if (channel.min_amount && moneyFloat < channel.min_amount) {
-      return res.json({ code: 1006, msg: `支付金额不能小于 ${channel.min_amount} 元` });
+    const minAmount = parseFloat(channel.min_amount) || 0;
+    const maxAmount = parseFloat(channel.max_amount) || 0;
+    if (minAmount > 0 && moneyFloat < minAmount) {
+      return res.json({ code: 1006, msg: `支付金额不能小于 ${minAmount} 元` });
     }
-    if (channel.max_amount && moneyFloat > channel.max_amount) {
-      return res.json({ code: 1007, msg: `支付金额不能大于 ${channel.max_amount} 元` });
+    if (maxAmount > 0 && moneyFloat > maxAmount) {
+      return res.json({ code: 1007, msg: `支付金额不能大于 ${maxAmount} 元` });
     }
 
     // 获取费率：商户个人费率优先，否则用支付组费率
@@ -2353,6 +2366,12 @@ async function handleSubmit(req, res) {
     if (!merchant) {
       return res.status(400).send('商户不存在或已禁止');
     }
+
+    // 验证回调域名白名单
+    const domainCheck = await validateCallbackDomain(merchant.user_id, notify_url);
+    if (!domainCheck.valid) {
+      return res.status(400).send(domainCheck.message);
+    }
     
     let channel = null;
 
@@ -2397,13 +2416,15 @@ async function handleSubmit(req, res) {
         return res.status(400).send('支付通道不存在或已关闭');
       }
 
-      // 检查金额限制
+      // 检查金额限制（只有限额大于0时才检查）
       const moneyFloat = parseFloat(money);
-      if (channel.min_amount && moneyFloat < channel.min_amount) {
-        return res.status(400).send(`支付金额不能小于 ${channel.min_amount} 元`);
+      const minAmount = parseFloat(channel.min_amount) || 0;
+      const maxAmount = parseFloat(channel.max_amount) || 0;
+      if (minAmount > 0 && moneyFloat < minAmount) {
+        return res.status(400).send(`支付金额不能小于 ${minAmount} 元`);
       }
-      if (channel.max_amount && moneyFloat > channel.max_amount) {
-        return res.status(400).send(`支付金额不能大于 ${channel.max_amount} 元`);
+      if (maxAmount > 0 && moneyFloat > maxAmount) {
+        return res.status(400).send(`支付金额不能大于 ${maxAmount} 元`);
       }
     }
 
@@ -2475,6 +2496,12 @@ async function handleMapi(req, res) {
       return res.json({ code: -1, msg: '商户不存在或已禁止' });
     }
 
+    // 验证回调域名白名单
+    const domainCheck = await validateCallbackDomain(merchant.user_id, notify_url);
+    if (!domainCheck.valid) {
+      return res.json({ code: -1, msg: domainCheck.message });
+    }
+
     // 验证签名
     const signParams = { pid, out_trade_no, notify_url, name, money };
     if (type) signParams.type = type;
@@ -2523,13 +2550,15 @@ async function handleMapi(req, res) {
         return res.json({ code: -1, msg: '支付通道不存在或已关闭' });
       }
 
-      // 检查金额限制
+      // 检查金额限制（只有限额大于0时才检查）
       const moneyFloat = parseFloat(money);
-      if (channel.min_amount && moneyFloat < channel.min_amount) {
-        return res.json({ code: -1, msg: `支付金额不能小于 ${channel.min_amount} 元` });
+      const minAmount = parseFloat(channel.min_amount) || 0;
+      const maxAmount = parseFloat(channel.max_amount) || 0;
+      if (minAmount > 0 && moneyFloat < minAmount) {
+        return res.json({ code: -1, msg: `支付金额不能小于 ${minAmount} 元` });
       }
-      if (channel.max_amount && moneyFloat > channel.max_amount) {
-        return res.json({ code: -1, msg: `支付金额不能大于 ${channel.max_amount} 元` });
+      if (maxAmount > 0 && moneyFloat > maxAmount) {
+        return res.json({ code: -1, msg: `支付金额不能大于 ${maxAmount} 元` });
       }
     }
 
