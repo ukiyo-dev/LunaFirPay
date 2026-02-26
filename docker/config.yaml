@@ -1,0 +1,27 @@
+database:
+  host: "db"
+  port: 3306
+  user: "lunafirpay"
+  password: "lunafirpay_pass"
+  database: "lunafirpay"
+  timezone: "+08:00"
+
+callbackProxy: ""
+
+turnstile:
+  enabled: false
+  siteKey: ""
+  secretKey: ""
+
+telegram:
+  botToken: ""
+  botName: "epay_notify_bot"
+
+email:
+  enabled: false
+  host: "smtp.example.com"
+  port: 465
+  secure: true
+  user: ""
+  pass: ""
+  from: ""
