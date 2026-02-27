@@ -39,6 +39,8 @@
 
 ### 使用 Docker Compose 一键部署
 
+本项目已内置 Docker 部署文件，支持一条命令启动应用和数据库。
+
 ```bash
 docker compose up -d --build
 ```
@@ -48,8 +50,45 @@ docker compose up -d --build
 - `lunafirpay-app`（端口 `3000`）
 - `lunafirpay-db`（端口 `3306`）
 
+#### 配置方式（单一配置源）
+
+Docker 部署只使用根目录 `config.yaml`，不需要维护第二份 Docker 专用配置。
+
+你只需要修改 `config.yaml` 里的数据库配置：
+
+```yaml
+database:
+  host: "db"
+  port: 3306
+  user: "你的数据库用户"
+  password: "你的数据库密码"
+  database: "lunafirpay"
+```
+
+> `host` 在 compose 场景必须是 `db`（MySQL 服务名）。
+
+#### 自动数据库用户同步
+
+应用容器启动时会先执行数据库用户同步脚本：
+
+- 按 `config.yaml` 读取 `database.user/password/database`
+- 使用 MySQL root 权限自动创建/更新对应用户
+- 自动授予该库权限后再启动 Node.js 服务
+
+因此你只改 `config.yaml` 一处即可，避免账号不一致导致 `Access denied`。
+
+#### 首次部署/重置数据库
+
 首次启动时会自动执行 `initialization.sql` 初始化数据库。
-应用配置文件使用根目录 `config.yaml`，生产环境请先修改其中数据库密码、邮件和 Telegram 配置。
+
+如果你改了数据库账号、密码或库结构，建议重建数据卷让初始化重新执行：
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+> `down -v` 会删除数据库数据，请先备份。
 
 
 ```bash
