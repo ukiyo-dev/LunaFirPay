@@ -49,7 +49,7 @@ docker compose up -d --build
 - `lunafirpay-db`（端口 `3306`）
 
 首次启动时会自动执行 `initialization.sql` 初始化数据库。
-应用配置文件使用 `docker/config.yaml`，生产环境请先修改其中数据库密码、邮件和 Telegram 配置。
+应用配置文件使用根目录 `config.yaml`，生产环境请先修改其中数据库密码、邮件和 Telegram 配置。
 
 
 ```bash

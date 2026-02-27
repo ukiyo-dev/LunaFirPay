@@ -10,8 +10,8 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY . .
 
-RUN chmod +x /app/docker/entrypoint.sh
+RUN chmod +x /app/container-entrypoint.sh
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/docker/entrypoint.sh"]
+ENTRYPOINT ["/app/container-entrypoint.sh"]

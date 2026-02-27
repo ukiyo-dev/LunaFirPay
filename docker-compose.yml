@@ -9,9 +9,8 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
     environment:
       MYSQL_ROOT_PASSWORD: root_change_me
+      MYSQL_ROOT_HOST: "%"
       MYSQL_DATABASE: lunafirpay
-      MYSQL_USER: lunafirpay
-      MYSQL_PASSWORD: lunafirpay_pass
       TZ: Asia/Shanghai
     ports:
       - "3306:3306"
@@ -19,7 +18,7 @@ services:
       - db_data:/var/lib/mysql
       - ./initialization.sql:/docker-entrypoint-initdb.d/01-initialization.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -38,9 +37,10 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./docker/config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
     environment:
       TZ: Asia/Shanghai
+      DB_ROOT_PASSWORD: root_change_me
 
 volumes:
   db_data:

@@ -13,7 +13,6 @@ pnpm-debug.log*
 # Config files with sensitive data (example files)
 config.json
 config.yaml
-!docker/config.yaml
 
 # Logs
 logs/
